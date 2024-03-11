@@ -1,0 +1,100 @@
+import functools
+from transformers import pipeline
+
+# Initialize pipeline functions (outside the loop for efficiency)
+sentiment_analyzer = pipeline("sentiment-analysis")
+question_answerer = pipeline("question-answering")
+
+# In-memory cache (limited to current session)
+call_cache = {}
+
+
+def unified_pipeline(task, text, **kwargs):
+    """Handles multiple pipeline tasks based on input."""
+    if task == "sentiment-analysis":
+        return sentiment_analyzer(text)
+    elif task == "question-answering":
+        return question_answerer(**kwargs)
+    else:
+        raise ValueError(f"Unsupported task: {task}")
+
+
+def get_context_from_api(question):
+    """Retrieves context from Gemini API, attempting extraction with NER and keywords."""
+    if question in call_cache:
+        return call_cache[question]
+
+    # Replace placeholders with your actual API call details (URL, headers, etc.)
+    # Ensure proper formatting and authentication (if required)
+    api_url = f"https://YOUR_GEMINI_API_ENDPOINT?query={question}"
+    headers = {"Authorization": "YOUR_API_KEY"}  # Replace with your credentials
+
+    # Simplified response handling (assuming a plain text response from Gemini)
+    try:
+        response = requests.get(api_url, headers=headers).text  # Use appropriate library
+        # Attempt to extract information using NER (if supported)
+        try:
+            import spacy  # Try to import spaCy for Named Entity Recognition
+            nlp = spacy.load("en_core_web_sm")  # Load a small spaCy model (if available)
+            doc = nlp(response)
+            # Extract entities based on question type (who, what, when, where)
+            if question.lower().startswith("who"):
+                answer = [ent.text for ent in doc.ents if ent.label_ in ("PERSON")]
+            elif question.lower().startswith("what"):
+                answer = [ent.text for ent in doc.ents]  # Consider refining based on task
+            elif question.lower().startswith("when") or question.lower().startswith("where"):
+                answer = [ent.text for ent in doc.ents if ent.label_ in ("DATE", "GPE")]
+            else:
+                answer = []  # Fallback for other question types
+        except ImportError:
+            answer = []  # No spaCy, fallback to keyword search
+
+        # Fallback or additional approach: Keyword search
+        if not answer:
+            keywords = question.lower().split()
+            answer = [snippet for snippet in response.lower().split("\n") if any(key in snippet for key in keywords)]
+
+        call_cache[question] = answer
+        return answer
+    except Exception as e:
+        print(f"Error during API call: {e}")
+        return None
+
+
+def answer_question(question, context=""):
+    """Answers questions using the appropriate pipeline, potentially using cached context."""
+    if not context and question in call_cache:
+        # Attempt to answer using cached information (potentially from NER or keywords)
+        context = call_cache[question]
+    if context:
+        # If context is available (from cache or current call), use it for QA
+        for answer_snippet in context:
+            answer = question_answerer(question=question, context=answer_snippet)
+            if answer and answer["answer"]:  # Check for answer existence
+                return answer
+    else:
+        return "There seems to be an issue contacting Gemini or no relevant info found."
+
+
+def call_gemini(query):
+    """Interacts with Gemini and returns response (limited caching)."""
+    response = get_context_from_api(query)
+    if response:
+        return response
+    else:
+        return "There seems to be an issue contacting Gemini. Please try again later."
+
+
+while True:
+    question = input("Ask me a question (or type 'quit' to exit): ")
+    if question.lower() == 'quit':
+        break
+    try:
+        context = call_gemini(question)
+        if context:  # Check if context retrieval was successful
+            answer = answer_question(question=question, context=context)
+            print(f"Bard (powered by Gemini): {answer}")
+        else:
+            print(f"Unable to retrieve context for your question.")
+    except Exception as e:
+        print(f"Error during interaction: {e}")
